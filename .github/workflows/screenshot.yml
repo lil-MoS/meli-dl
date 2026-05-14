@@ -14,7 +14,6 @@ on:
   repository_dispatch:
     types: [screenshot_request]
 
-# Add permissions at workflow level
 permissions:
   contents: write
   actions: read
@@ -22,7 +21,6 @@ permissions:
 jobs:
   capture-screenshot:
     runs-on: ubuntu-latest
-    # Add permissions at job level too
     permissions:
       contents: write
     
@@ -31,7 +29,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          # Use the default GITHUB_TOKEN with proper permissions
           token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Set up unique identifiers
@@ -46,7 +43,7 @@ jobs:
           fi
           echo "TIMESTAMP=$(date +%s)" >> $GITHUB_ENV
           echo "UNIQUE_ID=$(uuidgen | cut -d'-' -f1)" >> $GITHUB_ENV
-          echo "REQUEST_ID=${UNIQUE_ID}_${TIMESTAMP}_${USER_ID}" >> $GITHUB_ENV
+          echo "REQUEST_ID=${UNIQUE_ID}_${TIMESTAMP}" >> $GITHUB_ENV
       
       - name: Create downloads directory
         run: mkdir -p downloads
@@ -54,53 +51,38 @@ jobs:
       - name: Capture screenshot
         id: capture
         run: |
-          # Encode URL properly
           ENCODED_URL=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${{ env.URL }}', safe=''))")
-          
-          # Generate filename with unique identifier
-          FILENAME="screenshot_${{ env.REQUEST_ID }}.png"
+          FILENAME="screenshot_${{ env.REQUEST_ID }}_user${{ env.USER_ID }}.png"
           FILEPATH="downloads/${FILENAME}"
           
-          # Call ScreenshotMachine API
-          echo "Capturing screenshot from: ${{ env.URL }}"
+          echo "Capturing: ${{ env.URL }}"
           curl -s -o "${FILEPATH}" "https://api.screenshotmachine.com/?key=dd29ad&url=${ENCODED_URL}&dimension=1024x1024"
           
-          # Check if file was downloaded successfully
           if [ -f "${FILEPATH}" ] && [ -s "${FILEPATH}" ]; then
             FILESIZE=$(stat -c%s "${FILEPATH}")
-            echo "✅ Screenshot captured successfully: ${FILENAME} (${FILESIZE} bytes)"
+            echo "✅ Success: ${FILENAME} (${FILESIZE} bytes)"
             echo "filename=${FILENAME}" >> $GITHUB_OUTPUT
-            echo "filepath=${FILEPATH}" >> $GITHUB_OUTPUT
             echo "filesize=${FILESIZE}" >> $GITHUB_OUTPUT
+            echo "status=success" >> $GITHUB_OUTPUT
           else
-            echo "❌ Failed to capture screenshot"
-            # Create an error placeholder image (optional)
-            echo "Error: Screenshot capture failed for ${{ env.URL }}" > downloads/error_${{ env.REQUEST_ID }}.txt
+            echo "❌ Failed to capture"
+            echo "status=failed" >> $GITHUB_OUTPUT
             exit 1
           fi
       
-      - name: Commit and push screenshot
-        if: success()
+      - name: Commit screenshot
+        if: steps.capture.outputs.status == 'success'
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          
-          # Add the screenshot file
           git add downloads/${{ steps.capture.outputs.filename }}
-          
-          # Check if there are changes to commit
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "📸 Add screenshot for request ${{ env.REQUEST_ID }}"
-            git push origin ${{ github.ref_name }}
-            echo "✅ Screenshot pushed to repository"
-          fi
+          git commit -m "📸 Screenshot for request ${{ env.REQUEST_ID }}" || echo "No changes"
+          git push origin ${{ github.ref_name }} || echo "Push failed"
       
-      - name: Create metadata file
-        if: success()
+      - name: Save metadata
+        if: steps.capture.outputs.status == 'success'
         run: |
-          cat > downloads/${{ env.REQUEST_ID }}.json << EOF
+          cat > downloads/${{ env.REQUEST_ID }}_user${{ env.USER_ID }}.json << EOF
           {
             "request_id": "${{ env.REQUEST_ID }}",
             "user_id": "${{ env.USER_ID }}",
@@ -108,33 +90,19 @@ jobs:
             "filename": "${{ steps.capture.outputs.filename }}",
             "filesize": ${{ steps.capture.outputs.filesize }},
             "timestamp": ${{ env.TIMESTAMP }},
-            "created_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "repository": "${{ github.repository }}",
-            "commit_sha": "${{ github.sha }}"
+            "status": "completed",
+            "download_url": "https://raw.githubusercontent.com/${{ github.repository }}/main/downloads/${{ steps.capture.outputs.filename }}"
           }
           EOF
           
-          git add downloads/${{ env.REQUEST_ID }}.json
-          
-          if git diff --staged --quiet; then
-            echo "No metadata changes to commit"
-          else
-            git commit -m "📋 Add metadata for request ${{ env.REQUEST_ID }}"
-            git push origin ${{ github.ref_name }}
-            echo "✅ Metadata pushed to repository"
-          fi
+          git add downloads/${{ env.REQUEST_ID }}_user${{ env.USER_ID }}.json
+          git commit -m "📋 Metadata for ${{ env.REQUEST_ID }}" || echo "No changes"
+          git push origin ${{ github.ref_name }} || echo "Push failed"
       
-      - name: Output result
-        if: always()
+      - name: Summary
         run: |
-          echo "📊 Request Summary:"
-          echo "  Request ID: ${{ env.REQUEST_ID }}"
-          echo "  User ID: ${{ env.USER_ID }}"
-          echo "  URL: ${{ env.URL }}"
-          if [ "${{ steps.capture.outcome }}" == "success" ]; then
-            echo "  Status: ✅ Success"
-            echo "  Screenshot: ${{ steps.capture.outputs.filename }}"
-            echo "  File size: ${{ steps.capture.outputs.filesize }} bytes"
-          else
-            echo "  Status: ❌ Failed"
-          fi
+          echo "📊 Request ID: ${{ env.REQUEST_ID }}"
+          echo "👤 User ID: ${{ env.USER_ID }}"
+          echo "🌐 URL: ${{ env.URL }}"
+          echo "📁 File: ${{ steps.capture.outputs.filename }}"
+          echo "📦 Size: ${{ steps.capture.outputs.filesize }} bytes"
