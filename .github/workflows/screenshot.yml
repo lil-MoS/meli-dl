@@ -14,15 +14,25 @@ on:
   repository_dispatch:
     types: [screenshot_request]
 
+# Add permissions at workflow level
+permissions:
+  contents: write
+  actions: read
+
 jobs:
   capture-screenshot:
     runs-on: ubuntu-latest
+    # Add permissions at job level too
+    permissions:
+      contents: write
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          # Use the default GITHUB_TOKEN with proper permissions
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Set up unique identifiers
         id: vars
@@ -52,28 +62,43 @@ jobs:
           FILEPATH="downloads/${FILENAME}"
           
           # Call ScreenshotMachine API
+          echo "Capturing screenshot from: ${{ env.URL }}"
           curl -s -o "${FILEPATH}" "https://api.screenshotmachine.com/?key=dd29ad&url=${ENCODED_URL}&dimension=1024x1024"
           
-          # Verify file was created
-          if [ -f "${FILEPATH}" ]; then
-            echo "Screenshot captured successfully: ${FILENAME}"
+          # Check if file was downloaded successfully
+          if [ -f "${FILEPATH}" ] && [ -s "${FILEPATH}" ]; then
+            FILESIZE=$(stat -c%s "${FILEPATH}")
+            echo "✅ Screenshot captured successfully: ${FILENAME} (${FILESIZE} bytes)"
             echo "filename=${FILENAME}" >> $GITHUB_OUTPUT
             echo "filepath=${FILEPATH}" >> $GITHUB_OUTPUT
-            echo "filesize=$(stat -c%s ${FILEPATH})" >> $GITHUB_OUTPUT
+            echo "filesize=${FILESIZE}" >> $GITHUB_OUTPUT
           else
-            echo "Failed to capture screenshot"
+            echo "❌ Failed to capture screenshot"
+            # Create an error placeholder image (optional)
+            echo "Error: Screenshot capture failed for ${{ env.URL }}" > downloads/error_${{ env.REQUEST_ID }}.txt
             exit 1
           fi
       
       - name: Commit and push screenshot
+        if: success()
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # Add the screenshot file
           git add downloads/${{ steps.capture.outputs.filename }}
-          git commit -m "Add screenshot for request ${{ env.REQUEST_ID }}"
-          git push
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "📸 Add screenshot for request ${{ env.REQUEST_ID }}"
+            git push origin ${{ github.ref_name }}
+            echo "✅ Screenshot pushed to repository"
+          fi
       
       - name: Create metadata file
+        if: success()
         run: |
           cat > downloads/${{ env.REQUEST_ID }}.json << EOF
           {
@@ -81,18 +106,35 @@ jobs:
             "user_id": "${{ env.USER_ID }}",
             "url": "${{ env.URL }}",
             "filename": "${{ steps.capture.outputs.filename }}",
-            "filesize": "${{ steps.capture.outputs.filesize }}",
-            "timestamp": "${{ env.TIMESTAMP }}",
-            "created_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            "filesize": ${{ steps.capture.outputs.filesize }},
+            "timestamp": ${{ env.TIMESTAMP }},
+            "created_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "repository": "${{ github.repository }}",
+            "commit_sha": "${{ github.sha }}"
           }
           EOF
           
           git add downloads/${{ env.REQUEST_ID }}.json
-          git commit -m "Add metadata for request ${{ env.REQUEST_ID }}"
-          git push
+          
+          if git diff --staged --quiet; then
+            echo "No metadata changes to commit"
+          else
+            git commit -m "📋 Add metadata for request ${{ env.REQUEST_ID }}"
+            git push origin ${{ github.ref_name }}
+            echo "✅ Metadata pushed to repository"
+          fi
       
       - name: Output result
+        if: always()
         run: |
-          echo "Request ID: ${{ env.REQUEST_ID }}"
-          echo "Screenshot saved as: ${{ steps.capture.outputs.filename }}"
-          echo "File path in repo: ${{ steps.capture.outputs.filepath }}"
+          echo "📊 Request Summary:"
+          echo "  Request ID: ${{ env.REQUEST_ID }}"
+          echo "  User ID: ${{ env.USER_ID }}"
+          echo "  URL: ${{ env.URL }}"
+          if [ "${{ steps.capture.outcome }}" == "success" ]; then
+            echo "  Status: ✅ Success"
+            echo "  Screenshot: ${{ steps.capture.outputs.filename }}"
+            echo "  File size: ${{ steps.capture.outputs.filesize }} bytes"
+          else
+            echo "  Status: ❌ Failed"
+          fi
