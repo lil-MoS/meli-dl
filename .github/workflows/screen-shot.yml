@@ -1,0 +1,47 @@
+name: Capture Screenshot with API
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL for screenshot'
+        required: true
+        default: 'https://example.com'
+      filename:
+        description: 'Screenshot file name (without extension)'
+        required: true
+        default: 'screenshot'
+
+permissions:
+  contents: write
+
+jobs:
+  screenshot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create screenshots directory
+        run: mkdir -p screenshot
+
+      - name: URL encode
+        id: encode
+        run: |
+          ENCODED=$(echo "${{ github.event.inputs.url }}" | sed 's/:/%3A/g' | sed 's/\//%2F/g' | sed 's/?/%3F/g' | sed 's/=/%3D/g' | sed 's/&/%26/g')
+          echo "encoded_url=${ENCODED}" >> $GITHUB_OUTPUT
+
+      - name: Take screenshot using API
+        run: |
+          curl -o "screenshot/${{ github.event.inputs.filename }}.jpeg" "https://api.screenshotmachine.com/?key=dd29ad&url=${{ steps.encode.outputs.encoded_url }}&dimension=1024x1024"
+
+      - name: Commit and push screenshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add screenshot/
+          git commit -m "Add screenshot of ${{ github.event.inputs.url }}" || echo "No changes to commit"
+          git push
