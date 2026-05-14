@@ -1,4 +1,4 @@
-name: Capture Screenshot with API
+name: اسکرین شات از url
 
 on:
   workflow_dispatch:
